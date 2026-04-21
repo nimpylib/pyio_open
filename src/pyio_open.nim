@@ -697,7 +697,7 @@ template open*[S](
       # raise LookupError instead of FileNotFoundError (like Python)
       discard open(nonfn, encoding="this is a invalid enc")
     doAssertRaises FileNotFoundError:
-      discard io.open(nonfn)  # an invalid filename, never existing
+      discard pyio_open.open(nonfn)  # an invalid filename, never existing
     block Write:
       var f = open(fn, "w",  encoding="utf-8")
       let ret = f.write("123\r\n")
