@@ -388,6 +388,12 @@ proc write(self: IOBase, s: string): int{.discardable.} =
   self.file.write s
   s.len
 
+proc write*(self: RawIOBase, s: openArray[char]): int{.discardable.} =
+  var text = newString(s.len)
+  for i, c in s:
+    text[i] = c
+  write(IOBase(self), text)
+
 proc write*(self: RawIOBase, s: PyBytes): int{.discardable.} =
   write(IOBase(self), $s)
 
