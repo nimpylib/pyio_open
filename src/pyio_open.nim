@@ -1,7 +1,17 @@
 
 ##[
 
-*NOTE*: not support js currently
+*NOTE*: JS backend (Node.js/Deno) is supported experimentally
+
+### JS backend difference (extra)
+- `encoding` attr (of `open`) supports only those in WHATWG's
+  encoding standard when decoding, and fewer (those Node's
+  `Buffer` knows, plus `utf-8` everywhere) when encoding
+- `errors` is effective for decoding: `strict` raises on error,
+  others decode permissively like `replace` in Python
+- write to fd is achieved by using the fd directly,
+  not a `dup`'ed copy, so `close()` on it also closes the original fd
+- Deno path-opened files do not expose a numeric fd, so `fileno()` returns -1
 
 ## different from Python
 
@@ -25,16 +35,25 @@ when defined(nimPreviewSlimSystem):
   import std/[syncio, assertions]
 
 import std/[
-  strutils, encodings, os,
-  unicode,
+  strutils, os, unicode,
   ]
-from std/terminal import isatty
+when defined(js):
+  import pkg/jscompat/os  # fileExistsCompat
+  template fileExistsInternal(p: string): bool = fileExistsCompat(p)
+else:
+  import std/encodings
+  from std/terminal import isatty
+  template fileExistsInternal(p: string): bool = fileExists(p)
 
 import pkg/pyio_abc as io_abc # PathLike
 export io_abc except `$`
 
 import pkg/pyerrors/oserr
 export FileNotFoundError
+
+when defined(js):
+  # This must be included so its `File` shadows system's unusable JS type.
+  include ./pyio_open/private/fileobj_js
 
 #import ./os_impl/posix_like/truncate
 #import ./os_impl/posix_like/isatty
@@ -77,12 +96,16 @@ type
 
 converter toUnderFile(f: IOBase): File = f.file
 
-proc c_fflush(f: File): cint {.
-  importc: "fflush", header: "<stdio.h>".}
+when not defined(js):
+  proc c_fflush(f: File): cint {.
+    importc: "fflush", header: "<stdio.h>".}
 proc flush*(f: IOBase) =
-  let ret = f.c_fflush()
-  if ret != 0:
-    raiseErrno()
+  when defined(js):
+    f.file.flushFile()
+  else:
+    let ret = f.c_fflush()
+    if ret != 0:
+      raiseErrno()
 
 func tell*(f: IOBase): int64 = f.getFilePos()
 
@@ -176,16 +199,22 @@ method seek*(self: TextIOWrapper, cookie: int64, whence=SEEK_SET): int64{.discar
   # and replay the effect of read(chars_to_skip) from there.
   return procCall seek(IOBase(self), 0, whence)
 
-proc c_fgetc(stream: File): cint {.
-  importc: "fgetc", header: "<stdio.h>", tags: [].}
-proc c_ungetc(c: cint, f: File): cint {.
-  importc: "ungetc", header: "<stdio.h>", tags: [].}
+when not defined(js):
+  proc c_fgetc(stream: File): cint {.
+    importc: "fgetc", header: "<stdio.h>", tags: [].}
+  proc c_ungetc(c: cint, f: File): cint {.
+    importc: "ungetc", header: "<stdio.h>", tags: [].}
 
 proc peekChar(self: IOBase): char =
-  let ci = c_fgetc(self.file)
-  if ci < 0.cint: raise newException(EOFError, "")
-  discard c_ungetc(ci, self.file)
-  result = char ci
+  when defined(js):
+    let c = self.file.readChar()
+    self.file.pushCharBack(c)
+    result = c
+  else:
+    let ci = c_fgetc(self.file)
+    if ci < 0.cint: raise newException(EOFError, "")
+    discard c_ungetc(ci, self.file)
+    result = char ci
 
 template Iencode =
   result = self.codec.decode(result).data
@@ -314,8 +343,17 @@ proc readline*(self: TextIOWrapper, size: Natural): PyStr =
   Iencode
 
 proc read*(self: RawIOBase): PyBytes = bytes self.file.readAll
-proc readImpl(self: RawIOBase, size: int): string = 
-  discard self.file.readChars(toOpenArray(result, 0, size-1))
+proc readImpl(self: RawIOBase, size: int): string =
+  when defined(js):
+    for _ in 0..<size:
+      try:
+        result.add self.file.readChar()
+      except EOFError:
+        break
+  else:
+    result = newString(size)
+    let n = self.file.readChars(toOpenArray(result, 0, size-1))
+    result.setLen(n)
 proc read*(self: RawIOBase, size: int): PyBytes = bytes self.readImpl(size) 
 
 # TODO: re-impl using `_get_decoded_chars` (like Python)
@@ -353,13 +391,17 @@ proc write(self: IOBase, s: string): int{.discardable.} =
 proc write*(self: RawIOBase, s: PyBytes): int{.discardable.} =
   write(IOBase(self), $s)
 
+const UniversalNewLineForWrite =
+  when defined(js): "\n"  # os.linesep of node/deno
+  else: "\p"
+
 proc writeImpl(self: NoEncTextIOWrapper, s: string, cvtRet: proc(s: string): int): int{.discardable.} =
   proc retSubs(toNewLine: string): int = cvtRet(s.replace("\n", toNewLine))
   case self.newline
   of nlUniversalAsIs, nlReturn:
     # no translation takes place.
     cvtRet s
-  of nlUniversal: retSubs "\p"
+  of nlUniversal: retSubs UniversalNewLineForWrite
   of nlCarriage: retSubs "\r"
   of nlCarriageReturn: retSubs "\r\n"
 
@@ -433,6 +475,7 @@ method close*(self: TextIOWrapper) =
   self.codec.close()
 
 template raise_ValueError(s) = raise newException(ValueError, s)
+template raise_FileExistsError(s) = raise newException(FileExistsError, s)
 
 func checkClosed(self: IOBase, msg: string) =
   if self.closed:
@@ -446,7 +489,9 @@ func enter*[IO: IOBase](self: IO): IO =
 template exit*(self: IOBase, args: varargs[untyped]) = self.close()
 
 proc parseErrors(s: string): EncErrors = parseEnum[EncErrors](s, EncErrors.strict)
-proc getPreferredEncoding(): string = getCurrentEncoding(true)  ## concrete ANSI when on Windows
+proc getPreferredEncoding(): string =
+  when defined(js): "utf-8"
+  else: getCurrentEncoding(true)  ## concrete ANSI when on Windows
 const
   DefEncoding* = ""
   LocaleEncoding* = "locale"
@@ -457,10 +502,12 @@ proc toSet(s: string): set[char] =
 const False=false
 const True=true
 
-template getBlkSize(p: PathLike): int =
-  getFileInfo($p, followSymlink=true).blockSize
-
 template getBlkSize(fd: int): int = 0  # TODO: use fstat instead!
+when defined(js):
+  template getBlkSize(p: PathLike): int = 0
+else:
+  template getBlkSize(p: PathLike): int =
+    getFileInfo($p, followSymlink=true).blockSize
 
 proc isatty(p: CanIOOpenT): bool =
   when p is int:
@@ -471,7 +518,10 @@ proc isatty(p: CanIOOpenT): bool =
       result = f.isatty()
       f.close()
 
-func isatty*(f: IOBase): bool = f.file.isatty()
+when defined(js):
+  proc isatty*(f: IOBase): bool = f.file.isatty()  # js' tty detection reads global state
+else:
+  func isatty*(f: IOBase): bool = f.file.isatty()
 
 proc norm_buffering(file: CanIOOpenT, buffering: var int): bool =
   ## returns line_buffering
@@ -523,7 +573,7 @@ template genOpenInfo(result: untyped; file; mode: static string,
     TextIOWrapper, 
     RawIOBase, BufferedIOBase, BufferedReader, BufferedWriter, BufferedRandom,
     DefErrors, DefEncoding, norm_buffering,
-    FileMode, PathLike, fileExists
+    FileMode, PathLike, fileExistsInternal
   const
     modes = toSet mode
     allSet = toSet("axrwb+tU")
@@ -591,10 +641,12 @@ template genOpenInfo(result: untyped; file; mode: static string,
     # TextIOWrapper( ...line_buffering)
 
   let nmode =
-    when updating: FileMode.fmReadWrite
+    when updating:
+      when reading: FileMode.fmReadWriteExisting  # "r+", must not truncate
+      else: FileMode.fmReadWrite  # "w+" / "a+"(XXX: 'a+' not fully supported)
     elif creating:
       when file is PathLike:
-        if fileExists $file:
+        if fileExistsInternal $file:
           raise_FileExistsError("File exists: $#" % file.repr)
       FileMode.fmWrite
     elif reading: FileMode.fmRead
@@ -603,27 +655,36 @@ template genOpenInfo(result: untyped; file; mode: static string,
     else: doAssert false;FileMode.fmRead  # impossible
   resMode = nmode
 
-proc c_setvbuf(f: File, buf: pointer, mode: cint, size: csize_t): cint {.
-  importc: "setvbuf", header: "<stdio.h>".}
-let
-  IOFBF {.importc: "_IOFBF", nodecl.}: cint
-  IOLBF {.importc: "_IOLBF", nodecl.}: cint
-  # NOTE: For Win32, the behavior is the same as _IOFBF - Full Buffering
-  IONBF {.importc: "_IONBF", nodecl.}: cint
+when defined(js):
+  import pkg/errno/errnoUtils  # getErrno
+  proc raiseOsOrFileNotFoundError[T](file: PathLike[T]) =
+    file.raiseExcWithPath(getErrno().OSErrorCode)
+  proc raiseOsOrFileNotFoundError(file: int) =
+    raiseExcWithPath($file, getErrno().OSErrorCode)
 
-proc raiseOsOrFileNotFoundError[T](file: PathLike[T]) = file.raiseExcWithPath()
-proc raiseOsOrFileNotFoundError(file: int) = raiseExcWithPath($file)
+  proc initBufAsPy*(nfile: var File, buf: int) = discard
+else:
+  proc c_setvbuf(f: File, buf: pointer, mode: cint, size: csize_t): cint {.
+    importc: "setvbuf", header: "<stdio.h>".}
+  let
+    IOFBF {.importc: "_IOFBF", nodecl.}: cint
+    IOLBF {.importc: "_IOLBF", nodecl.}: cint
+    # NOTE: For Win32, the behavior is the same as _IOFBF - Full Buffering
+    IONBF {.importc: "_IONBF", nodecl.}: cint
 
-proc initBufAsPy*(nfile: var File, buf: int) =
-  ## init buffering as Python's
-  var (bfMode, bfSize) =
-    if buf == 1: (IOLBF, 0)
-    elif buf > 0 and buf.uint <= high(uint):
-      (IOFBF, buf)
-    elif buf == 0:
-      (IONBF, 0)
-    else: doAssert false;(typeof(IOFBF)(0), 0)
-  discard c_setvbuf(nfile, nil, bfMode, cast[csize_t](bfSize))
+  proc raiseOsOrFileNotFoundError[T](file: PathLike[T]) = file.raiseExcWithPath()
+  proc raiseOsOrFileNotFoundError(file: int) = raiseExcWithPath($file)
+
+  proc initBufAsPy*(nfile: var File, buf: int) =
+    ## init buffering as Python's
+    var (bfMode, bfSize) =
+      if buf == 1: (IOLBF, 0)
+      elif buf > 0 and buf.uint <= high(uint):
+        (IOFBF, buf)
+      elif buf == 0:
+        (IONBF, 0)
+      else: doAssert false;(typeof(IOFBF)(0), 0)
+    discard c_setvbuf(nfile, nil, bfMode, cast[csize_t](bfSize))
 
 template openImpl(result: untyped;
   file, mode1;
@@ -667,14 +728,14 @@ template open*(
   #closefd=True, opener
 ): untyped =
   bind openImpl
-  block:
+  (proc (): auto =
     openImpl(res,
       file, mode,
       buffering,
       encoding, 
       errors,
       newline)
-    res
+    res)()
 
 template open*[S](
   file: PathLike[S], mode: static[string|char] = "r",
@@ -715,12 +776,11 @@ template open*[S](
       assert uniLineRes == (when defined(windows):"123\n\n" else:"123\n")
       f.close()
   bind openImpl
-  block:
+  (proc (): auto =
     openImpl(res,
       file, mode,
       buffering,
       encoding, 
       errors,
       newline)
-    res
-
+    res)()

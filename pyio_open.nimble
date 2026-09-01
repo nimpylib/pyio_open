@@ -26,4 +26,28 @@ pylib "pyio_abc", " ^= 0.1.0"
 pylib "pyerrors", " ^= 0.1.0"
 pylib "pywarnings", " ^= 0.1.0"
 pylib "auditfunc", " ^= 0.1.0"
+pylib "jscompat", " ^= 0.1.1"
+pylib "errno", " ^= 0.1.0"
 
+import std/[algorithm, os]
+
+proc testFiles(): seq[string] =
+  for kind, path in walkDir("tests"):
+    if kind == pcFile:
+      let t = path.splitFile
+      if t.name[0] == 't' and t.ext == ".nim":
+        result.add path
+  result.sort()
+task t, "t": echo testFiles()
+
+task testJs, "Test Node.js backend":
+  for testFile in testFiles():
+    exec "nim js -r -d:nodejs " & quoteShell(testFile)
+
+task testDeno, "Test Deno backend":
+  for testFile in testFiles():
+    let name = testFile.splitFile.name
+    let output = getTempDir() / (name & ".deno.js")
+    exec "nim js -d:deno " & quoteShell("-o:" & output) & " " & quoteShell(testFile)
+    exec "deno run --allow-read --allow-write " &
+      quoteShell(output)

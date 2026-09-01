@@ -12,3 +12,9 @@
 provide open function like Python's io.open/builtins.open
 as well as some of functions in Lib/io
 
+The JavaScript backend is supported experimentally on Node.js and Deno.
+
+- Node.js: compile with `nim js -d:nodejs`.
+- Deno: compile with `nim js -d:deno`, then run with `deno run --allow-read --allow-write`.
+
+Filesystem access uses synchronous runtime APIs.
