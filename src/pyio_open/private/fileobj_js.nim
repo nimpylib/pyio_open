@@ -32,7 +32,6 @@ proc fsWriteSync(fd: cint, buf: JsObject, offset: cint, len: cint, pos: cint | J
   importjs: fs"writeSync".}
 proc fsFstatSync(fd: cint): JsObject {.importjs: fs"fstatSync".}
 proc fsFsyncSync(fd: cint) {.importjs: fs"fsyncSync".}
-proc jsvmIsatty(fd: cint): cint {.importc: ttyOrDenoInJs & ".isatty".}
 
 proc denoOpenSync(path: cstring, opts: JsObject): JsObject {.
   importjs: "Deno.openSync(#, #)".}
@@ -91,6 +90,8 @@ type
     pb: char
 
 proc getFileHandle*(f: File): FileHandle = f.fd
+func denoHandle*(f: File): JsObject = f.denoFile
+func usesDenoFile*(f: File): bool = f.isDenoFile
 
 proc discardRbuf(f: File) =
   f.hasPB = false
@@ -215,18 +216,6 @@ proc flushFile*(f: File) =
   if f.writable:
     jsTryDiscard:
       fsFsyncSync(f.fd.cint)
-
-proc isatty*(f: File): bool =
-  if f.isDenoFile:
-    try:
-      return denoIsTerminal(f.denoFile)
-    except:
-      return false
-  if f.fd.cint < 0: return false
-  if ttyOrDeno.isNull:
-    result = f.fd.cint < 3
-  else:
-    result = jsvmIsatty(f.fd.cint) != 0
 
 proc close*(f: File) =
   if f.isStd: return

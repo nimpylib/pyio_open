@@ -2,6 +2,7 @@ when defined(js):
   import std/jsffi
   import pkg/jscompat/utils/dispatch
   proc cIsatty(fd: cint): cint {.importc: ttyOrDenoInJs & ".isatty".}
+  proc denoIsTerminal(file: JsObject): bool {.importjs: "#.isTerminal()".}
   proc denoStdinIsatty(): bool {.importjs: "Deno.stdin.isTerminal(@)".}
   proc denoStdoutIsatty(): bool {.importjs: "Deno.stdout.isTerminal(@)".}
   proc denoStderrIsatty(): bool {.importjs: "Deno.stderr.isTerminal(@)".}
@@ -14,6 +15,14 @@ when defined(js):
       else: false
     elif ttyOrDeno.isNull: fd in 0..2
     else: cIsatty(fd.cint) != 0
+
+  proc isatty*(fd: int, denoFile: JsObject, isDenoFile: bool): bool =
+    if isDenoFile:
+      try:
+        return denoIsTerminal(denoFile)
+      except:
+        return false
+    isatty(fd)
 else:
   when defined(posix):
     proc isatty(fildes: cint): cint {.

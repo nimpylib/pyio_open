@@ -42,7 +42,6 @@ when defined(js):
   template fileExistsInternal(p: string): bool = fileExistsCompat(p)
 else:
   import std/encodings
-  from std/terminal import isatty
   template fileExistsInternal(p: string): bool = fileExists(p)
 
 import pkg/pyio_abc as io_abc # PathLike
@@ -55,8 +54,7 @@ import ./pyio_open/nio
 
 #import ./os_impl/posix_like/truncate
 #import ./os_impl/posix_like/isatty
-import ./pyio_open/private/isatty as isattyLib
-export isattyLib
+import ./pyio_open/private/isattyfile
 #import ./signal_impl/state
 #discard signal_global_state
 import ./pyio_open/private/ncodec
@@ -105,8 +103,6 @@ proc flush*(f: IOBase) =
       raiseErrno()
 
 func tell*(f: IOBase): int64 = f.getFilePos()
-
-#func isatty*(f: IOBase): bool = f.isatty()
 
 proc fileno*(f: IOBase): int = int getFileHandle f
 
@@ -521,10 +517,8 @@ proc isatty(p: CanIOOpenT): bool =
       result = f.isatty()
       f.close()
 
-when defined(js):
-  proc isatty*(f: IOBase): bool = f.file.isatty()  # js' tty detection reads global state
-else:
-  func isatty*(f: IOBase): bool = f.file.isatty()
+proc isatty*(f: IOBase): bool = f.file.isatty()  # js' tty detection reads global state
+# so not `func`
 
 proc norm_buffering(file: CanIOOpenT, buffering: var int): bool =
   ## returns line_buffering
