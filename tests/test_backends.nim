@@ -75,6 +75,20 @@ test "errors":
   doAssertRaises LookupError:
     discard io.open(fn, encoding="this is a invalid enc")
 
+when defined(js):
+  test "read and flush translate runtime errors to IOError":
+    var reader = io.open(fn, "rb")
+    let readerFile = reader
+    reader.close()
+    doAssertRaises IOError:
+      discard readerFile.read()
+
+    var writer = io.open(fn, "wb")
+    let writerFile = writer
+    writer.close()
+    doAssertRaises IOError:
+      writerFile.flush()
+
 test "closed":
   var f = io.open(fn, "r")
   check not f.closed

@@ -107,7 +107,7 @@ proc fillRbuf(f: File): bool =
     f.rbuf = jsBufAlloc(JS_READ_BUF_SIZE.cint)
     f.rbufValid = true
   var n: cint
-  catchJsErrAndRaise:
+  jsTryAsIOError:
     if f.isDenoFile:
       if not f.isStd:
         discard denoSeekSync(f.denoFile, cint(f.basePos), 0)
@@ -205,12 +205,11 @@ proc flushFile*(f: File) =
   if f.isStd: return
   if f.isDenoFile:
     if f.writable:
-      catchJsErrAndRaise:
+      jsTryAsIOError:
         denoSync(f.denoFile)
     return
-  if f.fd.cint < 0: return
   if f.writable:
-    catchJsErrAndRaise:
+    jsTryAsIOError:
       fsFsyncSync(f.fd.cint)
 
 proc isatty*(f: File): bool =
