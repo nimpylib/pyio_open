@@ -19,11 +19,11 @@ type EncErrors*{.pure.} = enum
   backslashreplace  ## - Replace with backslashed escape sequences.
   namereplace       ## - Replace with \N{...} escape sequences
                       ##   (only for encoding).
-
+{.pragma: PraEncoderCvt, raises: [ValueError, LookupError, OSError].}
 type
   CvtRes = tuple[data: string, len: int]
-  EncoderCvt = proc (s: string): CvtRes
-  EncoderClose = proc ()
+  EncoderCvt = proc (s: string): CvtRes {.PraEncoderCvt.}
+  EncoderClose = proc () {.raises: [].}
   NCodecInfo* = object
     name*: string
     errors*: string
@@ -124,7 +124,7 @@ when defined(js):
     let bufName = jsBufEncNameFor(enc)
     let isUtf8 = enc == "utf-8"
 
-    result.encode = proc (s: string): CvtRes =
+    result.encode = proc (s: string): CvtRes {.PraEncoderCvt.} =
       if isUtf8:
         result.data = jsBytesToString(jsEncodeToBytes(textEnc, cstring s))
       elif bufName != "":
@@ -136,7 +136,7 @@ when defined(js):
           "encoding " & encoding & " does not support encode on js backend")
       result.len = s.runeLen
 
-    result.decode = proc (s: string): CvtRes =
+    result.decode = proc (s: string): CvtRes {.PraEncoderCvt.} =
       var failed = false
       var res: cstring
       jsTryCatchE:
@@ -177,10 +177,10 @@ else:
       )
     except EncodingError:
       raise newException(LookupError, "unknown encoding: " & encoding)
-    result.encode = proc (s: string): CvtRes =
+    result.encode = proc (s: string): CvtRes {.PraEncoderCvt.} =
       result.data = oEncCvt.convert(s)
       result.len = s.runeLen
-    result.decode = proc(s: string): CvtRes =
+    result.decode = proc(s: string): CvtRes {.PraEncoderCvt.} =
       result.data = iEncCvt.convert(s)
       result.len = s.len
     result.close = proc() =

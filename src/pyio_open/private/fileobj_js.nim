@@ -164,7 +164,7 @@ proc write*(f: File, s: string) =
   let buf = jsBufFromBytes(s)
   let total = jsBufLen(buf)
   var written = 0
-  catchJsErrAndRaise:
+  jsTryAsIOError:
     block writeBlock:
       while written < total:
         let w =
@@ -217,7 +217,7 @@ proc flushFile*(f: File) =
     jsTryDiscard:
       fsFsyncSync(f.fd.cint)
 
-proc close*(f: File) =
+proc close*(f: File) {.raises: [].} =
   if f.isStd: return
   if f.isDenoFile:
     if f.fd.cint in 0..2: return  # never close stdio

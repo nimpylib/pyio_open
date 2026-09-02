@@ -273,7 +273,7 @@ template readlineImpl(self: RawIOBase; cond): untyped{.dirty.} =
   var res: string
   res.add self.readlineTill(res, cond)
   res
-proc readline*(self: RawIOBase): PyBytes = bytes readlineImpl(self, true)
+proc readline*(self: RawIOBase): PyBytes {.raises: [IOError].} = bytes readlineImpl(self, true)
 proc readline*(self: RawIOBase, size: Natural): PyBytes =
   bytes readlineImpl(self, res.len<size)
 
@@ -301,14 +301,16 @@ proc readlineImpl(self: NoEncTextIOWrapper, size: int): string =
   template Till(nl): untyped = t_readlineTill(result, result.len<size, nl)
   readlineWithTill Till
 
-proc readline*(self: NoEncTextIOWrapper): PyStr =
+proc readline*(self: NoEncTextIOWrapper): PyStr {.raises: [IOError].} =
   str self.readlineImpl()
 proc readline*(self: NoEncTextIOWrapper, size: int): PyStr =
   ## ..warning:: size is currently in bytes, not in characters
   # XXX: see above
   result = str self.readlineImpl(size)
 
-proc readline*(self: TextIOWrapper): PyStr =
+{.pragma: EncodingIOEffects, raises: [IOError, ValueError, LookupError, OSError].}
+
+proc readline*(self: TextIOWrapper): PyStr {.EncodingIOEffects.} =
   ## Python's readline
   runnableExamples:
     import std/strutils
@@ -335,7 +337,7 @@ proc readline*(self: TextIOWrapper, size: Natural): PyStr =
   result = self.readlineImpl(size)
   Iencode
 
-proc read*(self: RawIOBase): PyBytes = bytes self.file.readAll
+proc read*(self: RawIOBase): PyBytes {.raises: [IOError].} = bytes self.file.readAll
 proc readImpl(self: RawIOBase, size: int): string =
   when defined(js):
     for _ in 0..<size:
@@ -356,8 +358,8 @@ proc readImpl(self: NoEncTextIOWrapper): string =
     if s == "": break
     result.add s
 
-proc read*(self: NoEncTextIOWrapper): PyStr = str self.readImpl()
-proc read*(self: TextIOWrapper): PyStr =
+proc read*(self: NoEncTextIOWrapper): PyStr {.raises: [IOError].} = str self.readImpl()
+proc read*(self: TextIOWrapper): PyStr {.EncodingIOEffects.} =
   result = self.readImpl()
   Iencode
 
@@ -377,24 +379,24 @@ proc read*(self: TextIOWrapper, size: int): PyStr =
   result = self.readImpl(size)
   Iencode
 
-proc write(self: IOBase, s: string): int{.discardable.} =
+proc write(self: IOBase, s: string): int{.discardable, raises: [IOError].} =
   self.file.write s
   s.len
 
-proc write*(self: RawIOBase, s: openArray[char]): int{.discardable.} =
+proc write*(self: RawIOBase, s: openArray[char]): int{.discardable, raises: [IOError].} =
   var text = newString(s.len)
   for i, c in s:
     text[i] = c
   write(IOBase(self), text)
 
-proc write*(self: RawIOBase, s: PyBytes): int{.discardable.} =
+proc write*(self: RawIOBase, s: PyBytes): int{.discardable, raises: [IOError].} =
   write(IOBase(self), $s)
 
 const UniversalNewLineForWrite =
   when defined(js): "\n"  # os.linesep of node/deno
   else: "\p"
 
-proc writeImpl(self: NoEncTextIOWrapper, s: string, cvtRet: proc(s: string): int): int{.discardable.} =
+proc writeImpl(self: NoEncTextIOWrapper, s: string, cvtRet: proc(s: string): int{.EncodingIOEffects.}): int{.discardable.} =
   proc retSubs(toNewLine: string): int = cvtRet(s.replace("\n", toNewLine))
   case self.newline
   of nlUniversalAsIs, nlReturn:
@@ -410,7 +412,7 @@ proc write*(self: NoEncTextIOWrapper, s: PyStr): int{.discardable.} =
     s.len
   writeImpl(self, s, cvtRet)
 
-proc write*(self: TextIOWrapper, s: PyStr): int{.discardable.} =
+proc write*(self: TextIOWrapper, s: PyStr): int{.discardable, EncodingIOEffects.} =
   ## Writes the `s` to the stream and return the number of characters written
   ## 
   ## The following is from Python's doc of `open`: 
@@ -434,7 +436,7 @@ proc write*(self: TextIOWrapper, s: PyStr): int{.discardable.} =
     checkW "1\n2", "1\r2", newline="\r"
     checkW "我", "我", encoding="utf-8", writeLen=1
   
-  proc cvtRet(oriStr: string): int =
+  proc cvtRet(oriStr: string): int {.EncodingIOEffects.}=
     let t = self.codec.encode(oriStr)
     discard write(IOBase(self), t.data)
     t.len
@@ -466,12 +468,14 @@ template base_close() =
   self.closed = true
   self.file.close()
   
+{.push raises: [].}
 method close*(self: IOBase){.base.} = base_close()
 method close*(self: RawIOBase) = base_close()
 method close*(self: TextIOWrapper) =
   #procCall close IOBase(self)
   base_close()
   self.codec.close()
+{.pop.}
 
 template raise_ValueError(s) = raise newException(ValueError, s)
 template raise_FileExistsError(s) = raise newException(FileExistsError, s)
