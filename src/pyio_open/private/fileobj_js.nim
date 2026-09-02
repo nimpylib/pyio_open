@@ -4,7 +4,7 @@
 ## on top of `node:fs` or Deno's synchronous FsFile API,
 ## modeled after `std/syncio`
 
-import std/jsffi
+import std/[jsffi, jsconsole]
 import pkg/jscompat/utils/[dispatch, deno]
 import pkg/pyerrors/oserr
 import pkg/jscompat/utils/oserr
@@ -20,8 +20,6 @@ proc jsBufFromBytes(s: string): JsObject {.importjs: "Buffer.from(#)".}
 proc jsBufLen(b: JsObject): cint {.importjs: "#.length".}
 proc jsByteOf(b: JsObject, i: cint): char {.importjs: "#[#]".}
 proc jsFstatSize(o: JsObject): cint {.importjs: "#.size".}
-proc consoleLog(s: cstring) {.importjs: "console.log(#)".}
-proc consoleError(s: cstring) {.importjs: "console.error(#)".}
 
 proc fsOpenSync(path: cstring, flags: cstring): cint {.importjs: fs"openSync".}
 proc fsCloseSync(fd: cint) {.importjs: fs"closeSync".}
@@ -158,6 +156,20 @@ proc readAll*(f: File): string =
     if n <= 0: break
     for i in 0..<n: result.add tmp[i]
 
+proc readLine*(f: File): string =
+  while true:
+    try:
+      let c = f.readChar()
+      if c == '\n':
+        if result.len > 0 and result[^1] == '\r':
+          result.setLen(result.len - 1)
+        return
+      result.add c
+    except EOFError:
+      if result.len == 0:
+        raise
+      return
+
 proc write*(f: File, s: string) =
   if s.len == 0: return
   f.discardRbuf()
@@ -182,6 +194,19 @@ proc write*(f: File, s: string) =
         written += w
   if not f.append:
     f.basePos += int64(written)
+
+proc writeLine*(f: File, s: string) =
+  if not f.isStd:
+    f.write s
+    f.write "\p"
+    return
+  case f.fd.cint
+  of 1:
+    console.log(cstring s)
+  of 2:
+    console.error(cstring s)
+  else:
+    doAssert false, "standard input is not writable"
 
 proc setFilePos*(f: File, pos: int64, rel: FileSeekPos = fspSet) =
   if f.isStd:
