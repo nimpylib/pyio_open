@@ -51,9 +51,7 @@ export io_abc except `$`
 import pkg/pyerrors/oserr
 export FileNotFoundError
 
-when defined(js):
-  # This must be included so its `File` shadows system's unusable JS type.
-  include ./pyio_open/private/fileobj_js
+import ./pyio_open/nio
 
 #import ./os_impl/posix_like/truncate
 #import ./os_impl/posix_like/isatty
@@ -89,21 +87,20 @@ type
 type
   IOBase* = ref object of RootObj
     closed*: bool
-    file: File # Python does not have this field, but we can use, as here's Nim
+    file: nio.File # Python does not have this field, but we can use, as here's Nim
 
 type
   UnsupportedOperation* = object of PyOSError # and ValueError
 
-converter toUnderFile(f: IOBase): File = f.file
+converter toUnderFile(f: IOBase): nio.File = f.file
 
-when not defined(js):
-  proc c_fflush(f: File): cint {.
-    importc: "fflush", header: "<stdio.h>".}
 proc flush*(f: IOBase) =
   when defined(js):
     f.file.flushFile()
   else:
-    let ret = f.c_fflush()
+    proc c_fflush(f: syncio.File): cint {.cdecl,
+      importc: "fflush", header: "<stdio.h>".}
+    let ret = f.file.c_fflush()
     if ret != 0:
       raiseErrno()
 
@@ -200,9 +197,9 @@ method seek*(self: TextIOWrapper, cookie: int64, whence=SEEK_SET): int64{.discar
   return procCall seek(IOBase(self), 0, whence)
 
 when not defined(js):
-  proc c_fgetc(stream: File): cint {.
+  proc c_fgetc(stream: syncio.File): cint {.
     importc: "fgetc", header: "<stdio.h>", tags: [].}
-  proc c_ungetc(c: cint, f: File): cint {.
+  proc c_ungetc(c: cint, f: syncio.File): cint {.
     importc: "ungetc", header: "<stdio.h>", tags: [].}
 
 proc peekChar(self: IOBase): char =
@@ -519,7 +516,7 @@ proc isatty(p: CanIOOpenT): bool =
   when p is int:
     result = p.isatty()
   else:
-    var f: File
+    var f: nio.File
     if f.open($p, fmRead):
       result = f.isatty()
       f.close()
@@ -545,12 +542,21 @@ proc norm_buffering(file: CanIOOpenT, buffering: var int): bool =
   if buffering < 0: raise_ValueError("invalid buffering size")
   result = line_buffering
 
-proc `file=`[I: IOBase](self: var I, file: File) = self.file = file  # EXT.
+proc `file=`[I: IOBase](self: var I, file: nio.File) = self.file = file  # EXT.
 
-proc newNoEncTextIO*(file: File, name: string,
+proc newNoEncTextIO*(file: nio.File, name: string,
     newline=DefNewLine): NoEncTextIOWrapper =
   result = NoEncTextIOWrapper(name: name, file: file)
   result.initNewLineMode(newline)
+
+proc newStdNoEncTextIO(file: nio.File, name: string, mode: string): NoEncTextIOWrapper =
+  result = newNoEncTextIO(file, name)
+  result.mode = mode
+
+let
+  stdin*  = newStdNoEncTextIO(nio.stdin,  "<stdin>",  "r")
+  stdout* = newStdNoEncTextIO(nio.stdout, "<stdout>", "w")
+  stderr* = newStdNoEncTextIO(nio.stderr, "<stderr>", "w")
 
 proc initTextIO(encoding, errors, smode, newline: string): TextIOWrapper =
     var enc = encoding
@@ -668,9 +674,9 @@ when defined(js):
   proc raiseOsOrFileNotFoundError(file: int) =
     raiseExcWithPath($file, getErrno().OSErrorCode)
 
-  proc initBufAsPy*(nfile: var File, buf: int) = discard
+  proc initBufAsPy*(nfile: var nio.File, buf: int) = discard
 else:
-  proc c_setvbuf(f: File, buf: pointer, mode: cint, size: csize_t): cint {.
+  proc c_setvbuf(f: nio.File, buf: pointer, mode: cint, size: csize_t): cint {.
     importc: "setvbuf", header: "<stdio.h>".}
   let
     IOFBF {.importc: "_IOFBF", nodecl.}: cint
@@ -681,7 +687,7 @@ else:
   proc raiseOsOrFileNotFoundError[T](file: PathLike[T]) = file.raiseExcWithPath()
   proc raiseOsOrFileNotFoundError(file: int) = raiseExcWithPath($file)
 
-  proc initBufAsPy*(nfile: var File, buf: int) =
+  proc initBufAsPy*(nfile: var nio.File, buf: int) =
     ## init buffering as Python's
     var (bfMode, bfSize) =
       if buf == 1: (IOLBF, 0)
@@ -711,7 +717,7 @@ template openImpl(result: untyped;
   genOpenInfo(result, file, smode, buf,
       encoding = encoding1, errors=errors1, newline=newline1, resMode=nmode)
   
-  var nfile: File
+  var nfile: nio.File
   sys.audit("open", file, smode)  ## XXX: PY-DIFF: 3rd arg shall be flags
   when file is int:
     let succ = open(nfile, FileHandle file, mode=nmode)

@@ -1,5 +1,4 @@
-## this module is designed to be `include`d into `pyio_open.nim`
-## on JS target only (Node.js/Deno)
+## JS target only (Node.js/Deno)
 ## 
 ## it re-declares `File`/`FileHandle` and implements file IO
 ## on top of `node:fs` or Deno's synchronous FsFile API,
@@ -76,6 +75,7 @@ type
     fd*: FileHandle
     denoFile: JsObject
     isDenoFile: bool
+    isStd: bool
     basePos*: int64  # pos when read-buffer is inactive
     name*: string
     writable*: bool
@@ -183,6 +183,8 @@ proc write*(f: File, s: string) =
     f.basePos += int64(written)
 
 proc setFilePos*(f: File, pos: int64, rel: FileSeekPos = fspSet) =
+  if f.isStd:
+    raise newException(IOError, "cannot set file position")
   f.discardRbuf()
   case rel
   of fspSet:
@@ -200,6 +202,7 @@ proc setFilePos*(f: File, pos: int64, rel: FileSeekPos = fspSet) =
       f.basePos = int64(sz) + pos
 
 proc flushFile*(f: File) =
+  if f.isStd: return
   if f.isDenoFile:
     if f.writable:
       catchJsErrAndRaise:
@@ -223,6 +226,7 @@ proc isatty*(f: File): bool =
     result = jsvmIsatty(f.fd.cint) != 0
 
 proc close*(f: File) =
+  if f.isStd: return
   if f.isDenoFile:
     if f.fd.cint in 0..2: return  # never close stdio
     catchJsErrAndRaise:
@@ -279,9 +283,20 @@ proc open*(f: var File, filehandle: FileHandle,
       of 2: jsExpr"Deno.stderr"
       else: return false
     f = File(fd: filehandle, denoFile: denoFile, isDenoFile: true,
+      isStd: true,
       name: "<fd " & $filehandle.int & ">",
       writable: mode != fmRead, append: mode == fmAppend)
   else:
-    f = File(fd: filehandle, name: "<fd " & $filehandle.int & ">",
+    f = File(fd: filehandle, isStd: filehandle.cint in 0..2,
+      name: "<fd " & $filehandle.int & ">",
       writable: mode != fmRead, append: mode == fmAppend)
   result = true
+
+proc newStdFile(name: string, fd: int, mode: FileMode): File =
+  discard result.open(FileHandle fd, mode)
+  result.name = name
+
+let
+  stdin* = newStdFile("<stdin>", 0, fmRead)
+  stdout* = newStdFile("<stdout>", 1, fmWrite)
+  stderr* = newStdFile("<stderr>", 2, fmWrite)
