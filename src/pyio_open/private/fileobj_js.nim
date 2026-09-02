@@ -265,6 +265,11 @@ proc open*(f: var File, p: string, mode: FileMode = fmRead): bool =
     append: mode == fmAppend)
   result = true
 
+proc open*(filename: string,
+            mode: FileMode = fmRead): File =
+  if not open(result, filename, mode):
+    raise newException(IOError, "cannot open: " & filename)
+
 proc open*(f: var File, filehandle: FileHandle,
     mode: FileMode = fmRead): bool =
   if filehandle.cint < 0: return false
