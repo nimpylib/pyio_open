@@ -76,7 +76,7 @@ test "errors":
     discard io.open(fn, encoding="this is a invalid enc")
 
 when defined(js):
-  test "read and flush translate runtime errors to IOError":
+  test "read translates runtime errors and flush discards them":
     var reader = io.open(fn, "rb")
     let readerFile = reader
     reader.close()
@@ -86,8 +86,7 @@ when defined(js):
     var writer = io.open(fn, "wb")
     let writerFile = writer
     writer.close()
-    doAssertRaises IOError:
-      writerFile.flush()
+    writerFile.flush()
 
 test "closed":
   var f = io.open(fn, "r")

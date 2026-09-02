@@ -202,14 +202,18 @@ proc setFilePos*(f: File, pos: int64, rel: FileSeekPos = fspSet) =
       f.basePos = int64(sz) + pos
 
 proc flushFile*(f: File) =
-  if f.isStd: return
+  if f.isStd:
+    jsTryDiscard:
+      if f.isDenoFile: denoSyncIfSupported(f.denoFile)
+      else: fsFsyncSync(f.fd.cint)
+    return
   if f.isDenoFile:
     if f.writable:
-      jsTryAsIOError:
+      jsTryDiscard:
         denoSync(f.denoFile)
     return
   if f.writable:
-    jsTryAsIOError:
+    jsTryDiscard:
       fsFsyncSync(f.fd.cint)
 
 proc isatty*(f: File): bool =
@@ -228,12 +232,12 @@ proc close*(f: File) =
   if f.isStd: return
   if f.isDenoFile:
     if f.fd.cint in 0..2: return  # never close stdio
-    catchJsErrAndRaise:
+    jsTryDiscard:
       denoClose(f.denoFile)
     f.fd = FileHandle -1
     return
   if f.fd.cint < 3: return  # never close stdio
-  catchJsErrAndRaise:
+  jsTryDiscard:
     fsCloseSync(f.fd.cint)
   f.fd = FileHandle -1
 

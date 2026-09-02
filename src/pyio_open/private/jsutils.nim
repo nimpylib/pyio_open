@@ -16,3 +16,9 @@ template jsTryAsIOError*(body) {.dirty.} =
     {.emit: [msg, " = e.message ?? String(e);"].}
   if failed:
     raise newException(IOError, $msg)
+
+template jsTryDiscard*(body) {.dirty.} =
+  jsTryCatchE:
+    body
+  do:
+    discard
