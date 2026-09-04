@@ -11,3 +11,4 @@ htmldocs/
 /tests/*
 !/tests/*.nim
 !/tests/*.nims
+!/tests/*.sh
