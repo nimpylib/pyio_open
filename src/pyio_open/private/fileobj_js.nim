@@ -243,16 +243,12 @@ proc flushFile*(f: File) =
       fsFsyncSync(f.fd.cint)
 
 proc close*(f: File) {.raises: [].} =
-  if f.isStd: return
-  if f.isDenoFile:
-    if f.fd.cint in 0..2: return  # never close stdio
-    jsTryDiscard:
-      denoClose(f.denoFile)
-    f.fd = FileHandle -1
-    return
-  if f.fd.cint < 3: return  # never close stdio
+  if f.fd.cint < 0: return  # never close closed. reentrant
   jsTryDiscard:
-    fsCloseSync(f.fd.cint)
+    if f.isDenoFile:
+      denoClose(f.denoFile)
+    else:
+      fsCloseSync(f.fd.cint)
   f.fd = FileHandle -1
 
 const jsPrivOpenFlags: array[FileMode, cstring] = [
