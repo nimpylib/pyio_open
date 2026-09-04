@@ -291,30 +291,53 @@ proc open*(filename: string,
   if not open(result, filename, mode):
     raise newException(IOError, "cannot open: " & filename)
 
-proc open*(f: var File, filehandle: FileHandle,
-    mode: FileMode = fmRead): bool =
-  if filehandle.cint < 0: return false
+var stdin*, stdout*, stderr*: File
+
+template newF(File, tname): untyped {.dirty.} =
+  File(fd: FileHandle filehandle,
+        name: tname,
+        writable: mode != fmRead, append: mode == fmAppend)
+
+template DenoNoFdHint = discard
+# Deno does not allow opening arbitrary file descriptors.
+
+proc newStdFile(name: string, filehandle: int, mode: FileMode): File =
+  #discard result.open(FileHandle fd, mode)
   if inDeno:
-    let denoFile = case filehandle.cint
+    let denoFile = case filehandle
       of 0: jsExpr"Deno.stdin"
       of 1: jsExpr"Deno.stdout"
       of 2: jsExpr"Deno.stderr"
-      else: return false
-    f = File(fd: filehandle, denoFile: denoFile, isDenoFile: true,
-      isStd: true,
-      name: "<fd " & $filehandle.int & ">",
+      else:
+        DenoNoFdHint
+        doAssert false
+        jsNull
+    StdFile(fd: FileHandle filehandle, denoFile: denoFile, isDenoFile: true,
+      name: name,
       writable: mode != fmRead, append: mode == fmAppend)
   else:
-    f = File(fd: filehandle, isStd: filehandle.cint in 0..2,
-      name: "<fd " & $filehandle.int & ">",
-      writable: mode != fmRead, append: mode == fmAppend)
-  result = true
+    newF(StdFile, name)
 
-proc newStdFile(name: string, fd: int, mode: FileMode): File =
-  discard result.open(FileHandle fd, mode)
-  result.name = name
+stdin  = newStdFile("<stdin>",  0, fmRead)
+stdout = newStdFile("<stdout>", 1, fmWrite)
+stderr = newStdFile("<stderr>", 2, fmWrite)
 
-let
-  stdin* = newStdFile("<stdin>", 0, fmRead)
-  stdout* = newStdFile("<stdout>", 1, fmWrite)
-  stderr* = newStdFile("<stderr>", 2, fmWrite)
+proc open*(f: var File, filehandle: FileHandle,
+    mode: FileMode = fmRead): bool =
+  let fd = filehandle.cint
+  if fd < 0: return false
+  template retf(tf) =
+    f = tf
+    return true
+  case fd
+  of 0: retf stdin
+  of 1: retf stdout
+  of 2: retf stderr
+  else: discard
+  if inDeno:
+    DenoNoFdHint
+    return false
+  else:
+    let name = "<fd " & $fd & ">"
+    f = newF(File, name)
+    return true
