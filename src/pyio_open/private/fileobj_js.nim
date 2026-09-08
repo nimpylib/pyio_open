@@ -68,11 +68,10 @@ proc denoErrno(name: string): cint =
 
 type
   FileHandle* = distinct cint
-  File* = ref object
+  File* = ref object of RootObj
     fd*: FileHandle
     denoFile: JsObject
     isDenoFile: bool
-    isStd: bool
     basePos*: int64  # pos when read-buffer is inactive
     name*: string
     writable*: bool
@@ -86,6 +85,9 @@ type
     # 1-char pushback, used by `pyio_open.peekChar`
     hasPB: bool
     pb: char
+  StdFile = ref object of File
+
+template isStd(f: File): bool = f of StdFile
 
 proc getFileHandle*(f: File): FileHandle = f.fd
 func denoHandle*(f: File): JsObject = f.denoFile
@@ -101,26 +103,32 @@ proc getFilePos*(f: File): int64 =
   if f.rbufValid: f.rbufStart + int64(f.rbufPos)
   else: f.basePos
 
-proc fillRbuf(f: File): bool =
+template fillRbufAux(body) {.dirty.} =
   if not f.rbufValid:
     f.rbuf = jsBufAlloc(JS_READ_BUF_SIZE.cint)
     f.rbufValid = true
-  var n: cint
   jsTryAsIOError:
-    if f.isDenoFile:
-      if not f.isStd:
-        discard denoSeekSync(f.denoFile, cint(f.basePos), 0)
-      n = denoReadSync(f.denoFile, f.rbuf)
-    elif f.isStd:
-      n = fsReadSync(f.fd.cint, f.rbuf, 0, JS_READ_BUF_SIZE.cint)
-    else:
-      n = fsReadSync(f.fd.cint, f.rbuf, 0, JS_READ_BUF_SIZE.cint, cint(f.basePos))
+    let n: cint = body
   if n <= 0: return false
   f.rbufStart = f.basePos
   f.rbufLen = n
   f.rbufPos = 0
   f.basePos += int64 n
   result = true
+
+method fillRbuf(f: File): bool {.base, raises: [IOError].} =
+  fillRbufAux:
+    if f.isDenoFile:
+      discard denoSeekSync(f.denoFile, cint(f.basePos), 0)
+      denoReadSync(f.denoFile, f.rbuf)
+    else:
+      fsReadSync(f.fd.cint, f.rbuf, 0, JS_READ_BUF_SIZE.cint, cint(f.basePos))
+method fillRbuf(f: StdFile): bool {.raises: [IOError].} =
+  fillRbufAux:
+    if f.isDenoFile:
+      denoReadSync(f.denoFile, f.rbuf)
+    else:
+      fsReadSync(f.fd.cint, f.rbuf, 0, JS_READ_BUF_SIZE.cint)
 
 proc readChar*(f: File): char =
   if f.hasPB:
@@ -156,7 +164,7 @@ proc readAll*(f: File): string =
     if n <= 0: break
     for i in 0..<n: result.add tmp[i]
 
-proc readLine*(f: File): string =
+method readLine*(f: File): string {.base, raises: [IOError, EOFError].} =
   while true:
     try:
       let c = f.readChar()
@@ -195,11 +203,10 @@ proc write*(f: File, s: string) =
   if not f.append:
     f.basePos += int64(written)
 
-proc writeLine*(f: File, s: string) =
-  if not f.isStd:
-    f.write s
-    f.write "\p"
-    return
+method writeLine*(f: File, s: string){.base.} =
+  f.write s
+  f.write "\p"
+method writeLine*(f: StdFile, s: string) =
   case f.fd.cint
   of 1:
     console.log(cstring s)
@@ -208,9 +215,7 @@ proc writeLine*(f: File, s: string) =
   else:
     doAssert false, "standard input is not writable"
 
-proc setFilePos*(f: File, pos: int64, rel: FileSeekPos = fspSet) =
-  if f.isStd:
-    raise newException(IOError, "cannot set file position")
+method setFilePos*(f: File, pos: int64, rel: FileSeekPos = fspSet) {.base, raises: [IOError].} =
   f.discardRbuf()
   case rel
   of fspSet:
@@ -226,13 +231,10 @@ proc setFilePos*(f: File, pos: int64, rel: FileSeekPos = fspSet) =
       jsTryAsIOError:
         sz = jsFstatSize(fsFstatSync(f.fd.cint))
       f.basePos = int64(sz) + pos
+method setFilePos*(f: StdFile, pos: int64, rel: FileSeekPos = fspSet) {.raises: [IOError].}=
+  raise newException(IOError, "cannot set file position")
 
-proc flushFile*(f: File) =
-  if f.isStd:
-    jsTryDiscard:
-      if f.isDenoFile: denoSyncIfSupported(f.denoFile)
-      else: fsFsyncSync(f.fd.cint)
-    return
+method flushFile*(f: File) {.base, raises: [].} =
   if f.isDenoFile:
     if f.writable:
       jsTryDiscard:
@@ -241,6 +243,10 @@ proc flushFile*(f: File) =
   if f.writable:
     jsTryDiscard:
       fsFsyncSync(f.fd.cint)
+method flushFile*(f: StdFile) {.raises: [].} =
+  jsTryDiscard:
+    if f.isDenoFile: denoSyncIfSupported(f.denoFile)
+    else: fsFsyncSync(f.fd.cint)
 
 proc close*(f: File) {.raises: [].} =
   if f.fd.cint < 0: return  # never close closed. reentrant
