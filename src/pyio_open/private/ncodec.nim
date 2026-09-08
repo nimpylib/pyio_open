@@ -34,6 +34,7 @@ const
   DefErrors* = "strict"
 
 when defined(js):
+  import std/tables
   import std/[jsffi, strutils]
   import ./jsutils
 
@@ -78,7 +79,7 @@ when defined(js):
     ("mac-roman", "x-mac-roman"), ("macroman", "x-mac-roman"),
     ("iso-2022-jp", "iso-2022-jp"), ("hz-gb-2312", "hz-gb-2312"),
     ("utf-16be", "utf-16be"), ("utf-16-be", "utf-16be"),
-  ]
+  ].toTable
 
   # NOTE: Buffer's encoding list is smaller than TextDecoder's label list
   const jsBufEncAliases = [
@@ -89,12 +90,9 @@ when defined(js):
   ]
 
   proc normalizeJsEncoding(encoding: string): string =
-    var name = encoding.replace('_', '-').toLowerAscii
-    for (a, b) in jsEncAliases:
-      if name == a:
-        name = b
-        break
-    name
+    result = encoding.replace('_', '-').toLowerAscii
+    jsEncAliases.withValue result, val:
+      result = val
 
   proc jsBufEncNameFor(enc: string): string =
     for (a, b) in jsBufEncAliases:
