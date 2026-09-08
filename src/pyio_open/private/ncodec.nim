@@ -37,18 +37,8 @@ when defined(js):
   import std/tables
   import std/[jsffi, strutils]
   import ./jsutils
-
-  proc jsTextDecNew(enc: cstring, fatal: bool): JsObject {.
-    importjs: "new TextDecoder(#, {fatal: #})".}
-  proc jsDecodeToStr(dec: JsObject, s: string): cstring {.
-    importjs: "#.decode(Uint8Array.from(#))".}
-  proc jsTextEncNew(): JsObject {.importjs: "new TextEncoder()".}
-  proc jsEncodeToBytes(enc: JsObject, s: cstring): JsObject {.
-    importjs: "#.encode(#)".}
-  proc jsBytesLen(o: JsObject): int {.importjs: "#.length".}
-  proc jsBytesOf(o: JsObject, i: int): char {.importjs: "#[#]".}
-  proc jsBufFromStrEnc(s: cstring, enc: cstring): JsObject {.
-    importjs: "Buffer.from(#, #)".}
+  import pkg/jscompat/utils/[jsencodings, jstypedarrays]
+  import ./jsbuf
 
   # NOTE: WHATWG's encoding list, which is also what JS's TextDecoder
   # supports, overlaps with but is not the same as Python's codecs list.
@@ -81,54 +71,36 @@ when defined(js):
     ("utf-16be", "utf-16be"), ("utf-16-be", "utf-16be"),
   ].toTable
 
-  # NOTE: Buffer's encoding list is smaller than TextDecoder's label list
-  const jsBufEncAliases = [
-    ("utf-8", "utf8"),
-    ("utf-16le", "utf16le"),
-    ("ascii", "ascii"),
-    ("iso-8859-1", "latin1"),
-  ]
-
   proc normalizeJsEncoding(encoding: string): string =
     result = encoding.replace('_', '-').toLowerAscii
     jsEncAliases.withValue result, val:
       result = val
 
-  proc jsBufEncNameFor(enc: string): string =
-    for (a, b) in jsBufEncAliases:
-      if enc == a:
-        return b
-
-  proc jsBytesToString(b: JsObject): string =
-    for i in 0..<jsBytesLen(b):
-      result.add jsBytesOf(b, i)
+  proc jsBytesToString(b: TypedArray[uint8, auto]): string =
+    for i in 0..<b.len:
+      result.add b[i].char
 
   func initNCodecInfo*(encoding: string, errors = DefErrors): NCodecInfo =
     ## JS backend impl: decode with TextDecoder, encode with TextEncoder
-    ## (utf-8) or Buffer (other supported encodings)
+    ## (utf-8 only for encoding)
     result.name = encoding
     result.errors = errors
-    var dec: JsObject
+    var dec: TextDecoder
     var decFailed = false
     let enc = normalizeJsEncoding(encoding)
     jsTryCatchE:
-      dec = jsTextDecNew(cstring enc, errors == "strict")
+      dec = newTextDecoder(cstring enc, TextDecoderOptions{fatal: errors == "strict"})
     do:
       decFailed = true
     if decFailed:
       raise newException(LookupError, "unknown encoding: " & encoding)
 
-    let textEnc = jsTextEncNew()
-    let bufName = jsBufEncNameFor(enc)
+    let textEnc = newTextEncoder()
     let isUtf8 = enc == "utf-8"
 
     result.encode = proc (s: string): CvtRes {.PraEncoderCvt.} =
       if isUtf8:
-        result.data = jsBytesToString(jsEncodeToBytes(textEnc, cstring s))
-      elif bufName != "":
-        # Buffer raised RangeError for unknown enc is handled by jsBufEncNameFor
-        let t = jsBufFromStrEnc(cstring s, cstring bufName)
-        result.data = jsBytesToString(t)
+        result.data = jsBytesToString(textEnc.encode(cstring s))
       else:
         raise newException(ValueError,
           "encoding " & encoding & " does not support encode on js backend")
@@ -138,7 +110,7 @@ when defined(js):
       var failed = false
       var res: cstring
       jsTryCatchE:
-        res = jsDecodeToStr(dec, s)
+        res = dec.decode(toUint8Array(s))
       do:
         failed = true
       if failed:

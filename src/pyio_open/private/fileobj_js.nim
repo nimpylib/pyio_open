@@ -10,15 +10,12 @@ import pkg/pyerrors/oserr
 import pkg/jscompat/utils/oserr
 import pkg/errno/errnoUtils
 import ./jsutils
+import ./jsbuf
 
 const JS_READ_BUF_SIZE = 8192
 
 #-------- JS side helpers ---------
 
-proc jsBufAlloc(n: cint): JsObject {.importjs: "Buffer.alloc(#)".}
-proc jsBufFromBytes(s: string): JsObject {.importjs: "Buffer.from(#)".}
-proc jsBufLen(b: JsObject): cint {.importjs: "#.length".}
-proc jsByteOf(b: JsObject, i: cint): char {.importjs: "#[#]".}
 proc jsFstatSize(o: JsObject): cint {.importjs: "#.size".}
 
 proc fsOpenSync(path: cstring, flags: cstring): cint {.importjs: fs"openSync".}
@@ -77,7 +74,7 @@ type
     writable*: bool
     append*: bool
     # read-buffer, used for getFilePos consistency
-    rbuf: JsObject
+    rbuf: TypedArray[uint8, ArrayBuffer]
     rbufValid: bool
     rbufLen: cint
     rbufPos: cint
@@ -105,7 +102,7 @@ proc getFilePos*(f: File): int64 =
 
 template fillRbufAux(body) {.dirty.} =
   if not f.rbufValid:
-    f.rbuf = jsBufAlloc(JS_READ_BUF_SIZE.cint)
+    f.rbuf = newUint8Array(JS_READ_BUF_SIZE.cint)
     f.rbufValid = true
   jsTryAsIOError:
     let n: cint = body
@@ -138,7 +135,7 @@ proc readChar*(f: File): char =
   if not f.rbufValid or f.rbufPos >= f.rbufLen:
     if not f.fillRbuf():
       raise newException(EOFError, "readChar got EOF")
-  result = jsByteOf(f.rbuf, f.rbufPos)
+  result = chr f.rbuf[f.rbufPos]
   inc f.rbufPos
 
 proc pushCharBack*(f: File, c: char) =
@@ -181,9 +178,9 @@ method readLine*(f: File): string {.base, raises: [IOError, EOFError].} =
 proc write*(f: File, s: string) =
   if s.len == 0: return
   f.discardRbuf()
-  let buf = jsBufFromBytes(s)
-  let total = jsBufLen(buf)
-  var written = 0
+  let buf = toUint8Array(s)
+  let total = buf.length
+  var written: cint = 0
   jsTryAsIOError:
     block writeBlock:
       while written < total:

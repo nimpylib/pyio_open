@@ -26,7 +26,7 @@ pylib "pyio_abc", " ^= 0.1.0"
 pylib "pyerrors", " ^= 0.1.0"
 pylib "pywarnings", " ^= 0.1.0"
 pylib "auditfunc", " ^= 0.1.0"
-pylib "jscompat", " ^= 0.1.1"
+pylib "jscompat", " ^= 0.1.8"
 pylib "errno", " ^= 0.1.0"
 
 import std/[algorithm, os]
