@@ -8,6 +8,7 @@ import std/[jsffi, jsconsole]
 import pkg/jscompat/utils/[dispatch, deno]
 import pkg/pyerrors/oserr
 import pkg/jscompat/utils/oserr
+import pkg/jscompat/utils/jsencodings
 import pkg/errno/errnoUtils
 import ./jsutils
 import ./jsbuf
@@ -175,10 +176,9 @@ method readLine*(f: File): string {.base, raises: [IOError, EOFError].} =
         raise
       return
 
-proc write*(f: File, s: string) =
-  if s.len == 0: return
+proc write(f: File, buf: TypedArray[uint8, auto]) =
+  if buf.len == 0: return
   f.discardRbuf()
-  let buf = toUint8Array(s)
   let total = buf.length
   var written: cint = 0
   jsTryAsIOError:
@@ -199,6 +199,11 @@ proc write*(f: File, s: string) =
         written += w
   if not f.append:
     f.basePos += int64(written)
+
+proc write*(f: File, s: string) =
+  f.write toUint8Array(s)
+proc write*(f: File, s: cstring) =
+  f.write newTextEncoder().encode(s)
 
 method writeLine*(f: File, s: string){.base.} =
   f.write s
