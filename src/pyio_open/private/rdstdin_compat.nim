@@ -1,15 +1,29 @@
 
+
+const Nodejs = defined(nodejs)
+const npythonJsAsyncReadline*{.booldefine.} = Nodejs
+
 import pkg/jscompat/utils/asyncIfJs
-export asyncIfJs
+when defined(js) and not npythonJsAsyncReadline:
+  declarePlainNonAsync
+else:
+  export asyncIfJs
 
 when defined(js):
-  import std/jsffi
-  import pkg/jscompat/utils/asyncIfJs/js
 
-  when defined(nodejs):
-    import std/jsconsole
+  type ReadLineCb = proc(ps: cstring): MayPromise[cstring]
+  var rlCb: ReadLineCb
+  proc setReadLine*(f: ReadLineCb) =
+    rlCb = f
+
+  when defined(nimPreviewSlimSystem):
+    import std/assertions
+  static:assert Nodejs == npythonJsAsyncReadline
+  when Nodejs:
+    import pkg/jscompat/utils/asyncIfJs/js
+    import std/[jsffi, jsconsole]
     import pkg/nimpatch/destroyPatch
-    
+
     type
       InterfaceConstructor = JsObject
       InterfaceConstructorWrapper = object
@@ -43,7 +57,7 @@ when defined(js):
 
     let rl = initReadLine()
 
-    proc question(rl: InterfaceConstructor, ps: cstring): Promise[cstring]{.importcpp.}
+    #proc question(rl: InterfaceConstructor, ps: cstring): Promise[cstring]{.importcpp.}
     proc questionHandledEof(rl: InterfaceConstructor, ps: cstring
     ): Promise[cstring] =
       ## rl.question(ps) but catch EOF and raise as EOFError
@@ -59,20 +73,21 @@ when defined(js):
       ].}
 
     
-    proc readLineFromStdinMayAsync*(ps: cstring): cstring{.async.} =
+    proc readLineFromStdinAsync(ps: cstring): cstring{.async.} =
       let res = await rl.obj.questionHandledEof ps
       if res == cstring("\0"):
         cursorToNewLine()
         raise new EOFError
       res
-    proc readLineFromStdinMayAsync*(prompt: string): string{.async.} =
-      $(await prompt.cstring.readLineFromStdinMayAsync)
 
+    setReadLine readLineFromStdinAsync
   else:
-    import std/jsffi
-    proc prompt(ps: cstring): JsObject#[cstring or null]#{.importc.}
+    proc prompt(ps: cstring): cstring#[nilable]#{.importc.}
 
-    proc readLineFromStdin(ps: cstring): JsObject =
+    when not (defined(deno) or defined(jspure)):
+      import std/jsffi
+      import ./fileobj_js
+    proc readLineFromStdin(ps: cstring): cstring =
       when defined(deno):
         # XXX: deno's prompt(ps) when ps is non-empty
         #   performs tty.clearline && readLineFromStdin(if ps.len==0:"" else: ps+" ")
@@ -88,17 +103,25 @@ when defined(js):
         {.pop.}
         # XXX: we just try to keep consist
         # FIXME: if not ps.endsWith(' ')
-        prompt ps.removesuffix' '
+        result = prompt ps.removesuffix' '
+      elif defined(jspure):
+        result = prompt ps
       else:
-        prompt ps
-    proc readLineFromStdin*(prompt: string): string =
-      let res = prompt.cstring.readLineFromStdin
-      if res.isNull:
+        if jsTypeof(prompt.toJs) != "undefined":
+          result = prompt ps
+        else:
+          stdout.write ps
+          stdout.flushFile()
+          return cstring stdin.readLine
+      if result.isNil:
         raise new EOFError
-      $(res.to(cstring))
-    # To make consist with nodejs's async
-    proc readLineFromStdinMayAsync*(prompt: string): Promise[string] =
-      newPromise readLineFromStdin prompt
+
+    setReadLine readLineFromStdin
+
+  proc readLineFromStdinMayAsync*(ps: cstring): cstring{.mayAsync.} =
+    mayAwait rlCb ps
+  proc readLineFromStdinMayAsync*(ps: string): string{.mayAsync.} =
+    $(mayAwait rlCb ps.cstring)
 else:
   when not defined(wasm):
     import std/rdstdin
@@ -113,5 +136,4 @@ else:
       stdout.flushFile()
       stdin.readLine()
 
-const NPythonAsyncReadline* = declared(async)
 
