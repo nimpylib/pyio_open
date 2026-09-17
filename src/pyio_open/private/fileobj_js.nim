@@ -301,10 +301,15 @@ proc open*(filename: string,
 
 var stdin*, stdout*, stderr*: File
 
-template newF(File, tname): untyped {.dirty.} =
-  File(fd: FileHandle filehandle,
-        name: tname,
+proc new*[F: File](self: var F, name: string, filehandle: int|FileHandle, mode: FileMode) =
+  ## internal use, like `__init__` but overwrite `self`
+  self = F(fd: FileHandle filehandle,
+        name: name,
         writable: mode != fmRead, append: mode == fmAppend)
+template newF(File, tname): untyped {.dirty.} =
+  var f: File
+  f.new(tname, filehandle, mode)
+  f
 
 template DenoNoFdHint = discard
 # Deno does not allow opening arbitrary file descriptors.
