@@ -11,7 +11,7 @@ else:
 
 when defined(js):
 
-  type ReadLineCb = proc(ps: cstring): MayPromise[cstring]
+  type ReadLineCb = proc(ps: cstring): MayPromise[cstring] {.raises: [KeyboardInterrupt, IOError, EOFError].}
   var rlCb: ReadLineCb
   proc setReadLine*(f: ReadLineCb) =
     rlCb = f
