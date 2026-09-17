@@ -83,9 +83,9 @@ type
     # 1-char pushback, used by `pyio_open.peekChar`
     hasPB: bool
     pb: char
-  StdFile = ref object of File
+  StdioFile* = ref object of File
 
-template isStd(f: File): bool = f of StdFile
+template isStd(f: File): bool = f of StdioFile
 
 proc getFileHandle*(f: File): FileHandle = f.fd
 func denoHandle*(f: File): JsObject = f.denoFile
@@ -121,7 +121,7 @@ method fillRbuf(f: File): bool {.base, raises: [IOError].} =
       denoReadSync(f.denoFile, f.rbuf)
     else:
       fsReadSync(f.fd.cint, f.rbuf, 0, JS_READ_BUF_SIZE.cint, cint(f.basePos))
-method fillRbuf(f: StdFile): bool {.raises: [IOError].} =
+method fillRbuf(f: StdioFile): bool {.raises: [IOError].} =
   fillRbufAux:
     if f.isDenoFile:
       denoReadSync(f.denoFile, f.rbuf)
@@ -208,7 +208,7 @@ proc write*(f: File, s: cstring) =
 method writeLine*(f: File, s: string){.base.} =
   f.write s
   f.write "\p"
-method writeLine*(f: StdFile, s: string) =
+method writeLine*(f: StdioFile, s: string) =
   case f.fd.cint
   of 1:
     console.log(cstring s)
@@ -233,7 +233,7 @@ method setFilePos*(f: File, pos: int64, rel: FileSeekPos = fspSet) {.base, raise
       jsTryAsIOError:
         sz = jsFstatSize(fsFstatSync(f.fd.cint))
       f.basePos = int64(sz) + pos
-method setFilePos*(f: StdFile, pos: int64, rel: FileSeekPos = fspSet) {.raises: [IOError].}=
+method setFilePos*(f: StdioFile, pos: int64, rel: FileSeekPos = fspSet) {.raises: [IOError].}=
   raise newException(IOError, "cannot set file position")
 
 method flushFile*(f: File) {.base, raises: [].} =
@@ -245,7 +245,7 @@ method flushFile*(f: File) {.base, raises: [].} =
   if f.writable:
     jsTryDiscard:
       fsFsyncSync(f.fd.cint)
-method flushFile*(f: StdFile) {.raises: [].} =
+method flushFile*(f: StdioFile) {.raises: [].} =
   jsTryDiscard:
     if f.isDenoFile: denoSyncIfSupported(f.denoFile)
     else: fsFsyncSync(f.fd.cint)
@@ -325,11 +325,11 @@ proc newStdFile(name: string, filehandle: int, mode: FileMode): File =
         DenoNoFdHint
         doAssert false
         jsNull
-    StdFile(fd: FileHandle filehandle, denoFile: denoFile, isDenoFile: true,
+    StdioFile(fd: FileHandle filehandle, denoFile: denoFile, isDenoFile: true,
       name: name,
       writable: mode != fmRead, append: mode == fmAppend)
   else:
-    newF(StdFile, name)
+    newF(StdioFile, name)
 
 stdin  = newStdFile("<stdin>",  0, fmRead)
 stdout = newStdFile("<stdout>", 1, fmWrite)
