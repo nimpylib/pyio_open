@@ -8,7 +8,8 @@ when defined(js) and not npythonJsAsyncReadline:
   declarePlainNonAsync
 else:
   export asyncIfJs
-
+from pkg/pysimperr import KeyboardInterrupt
+export KeyboardInterrupt
 when defined(js):
 
   type ReadLineCb = proc(ps: cstring): MayPromise[cstring] {.raises: [KeyboardInterrupt, IOError, EOFError].}
@@ -33,6 +34,32 @@ when defined(js):
      import { stdin as input, stdout as output } from 'node:process';
      """.} # """ <- for code hint
 
+    proc newAbortController(): JsObject {.importjs: "new AbortController()".}
+
+    {.pragma: plainCb, noconv, raises: [].}
+    type Callback = proc (e: JsObject){.plainCb.}
+    var curAbortController = jsUndefined
+
+    proc rejectWithKeyboardInterrupt() {.plainCb.} =
+      #[abort the pending `rl.question` (if any) with a `KeyboardInterrupt`.
+       Aborting the `AbortSignal` makes node's readline reject the awaited
+       promise with the exception *and* reset its internal question state
+       (via `kQuestionCancel`), so that the exception is routed through the
+       awaited promise (instead of being thrown out of the `SIGINT` handler)
+       and a subsequent prompt is accepted.]#
+      if not curAbortController.isUndefined:
+        let c = curAbortController
+        curAbortController = jsUndefined
+        # we `raise` in `try` to setup exception env
+        #   to ensure the `e` contains traceback (
+        #     otherwise it even doesn't has `.name`
+        #   ),
+        # as this function is to be called in nodejs inner
+        #   event loop
+        try: raise new KeyboardInterrupt
+        except KeyboardInterrupt as e:
+          c.abort(e.toJs)
+
     proc initReadLine: InterfaceConstructorWrapper =
       {.emit: """
       // top level await must be on ES module
@@ -40,42 +67,49 @@ when defined(js):
       //const { stdin: input, stdout: output } = require('node:process');
 
       const rl = createInterface({ input, output });
-      rl.on("SIGINT", ()=>{});
-      // XXX: TODO: correctly handle ctrl-c (SIGINT)
       """.}
-      # Python does not exit on ctrl-c
-      # but re-asking a new input
-      #  I'd tried to implement that but failed,
-      #  current impl of handler is just doing nothing (an empty function)
-      {.emit: [result.obj, "= rl;"].}
+      let rl{.importjs.}: InterfaceConstructor
+      discard rl.on("SIGINT", rejectWithKeyboardInterrupt)
+      result.obj = rl
 
     defdestroy InterfaceConstructorWrapper:
       self.obj.close()
 
+    let rl = initReadLine()
+
+    proc questionHandledEof(rl: InterfaceConstructor, ps: cstring
+    ): Promise[cstring] =
+      ## rl.question(ps) but:
+      ## - EOF (ABORT_ERR) resolves as `nil`
+      ## - SIGINT rejects with `KeyboardInterrupt`
+      proc tnewPromise(cb: proc): typeof(result) {.importjs: "new Promise(@)".}
+      result = tnewPromise proc (resolve, reject: Callback) {.raises: [].} =
+        curAbortController = newAbortController()
+        let opts = newJsObject()
+        opts["signal"] = curAbortController.signal
+        discard rl.question(ps, opts).then(
+          proc (v: JsObject) =
+            curAbortController = jsUndefined
+            resolve(v)
+          ,
+          proc (e: JsObject) =
+            curAbortController = jsUndefined
+            if jsTypeof(e) == "object" and e.code.to(cstring) == "ABORT_ERR":
+              let cause = e.cause
+              if not cause.isUndefined and not cause.isNull:
+                reject(cause)     # SIGINT: KeyboardInterrupt carried as reason
+                return
+              resolve(nil.toJs)   # EOF
+              return
+            reject(e)
+        )
+    
     proc cursorToNewLine{.noconv.} =
       console.log(cstring"")
 
-    let rl = initReadLine()
-
-    #proc question(rl: InterfaceConstructor, ps: cstring): Promise[cstring]{.importcpp.}
-    proc questionHandledEof(rl: InterfaceConstructor, ps: cstring
-    ): Promise[cstring] =
-      ## rl.question(ps) but catch EOF and raise as EOFError
-      {.emit: [
-        result, " = ",
-        rl, ".question(", ps, """).catch(e=>{
-          if (typeof(e) === "object" && e.code === "ABORT_ERR") {""",
-            r"return '\0';",
-          """
-          }
-        });"""
-        # """ <- for code hint
-      ].}
-
-    
     proc readLineFromStdinAsync(ps: cstring): cstring{.async.} =
       let res = await rl.obj.questionHandledEof ps
-      if res == cstring("\0"):
+      if res.isNil:
         cursorToNewLine()
         raise new EOFError
       res
@@ -123,17 +157,37 @@ when defined(js):
   proc readLineFromStdinMayAsync*(ps: string): string{.mayAsync.} =
     $(mayAwait rlCb ps.cstring)
 else:
-  when not defined(wasm):
-    import std/rdstdin
-    template readLineFromStdinMayAsync*(prompt): string = 
-      bind readLineFromStdin
-      readLineFromStdin prompt
-  else:
-    when defined(nimPreviewSlimSystem):
-      import std/syncio
-    template readLineFromStdinMayAsync*(prompt): string = 
-      stdout.write prompt
-      stdout.flushFile()
-      stdin.readLine()
+  # Q: Why not use std/rdstdin?
+  # A: rdstdin.readLineFromStdin cannot distinguish
+  #   ctrlC and ctrlD and other error
 
+  # condition copied from source code of rdstdin
+  const notSupLinenoise = defined(windows) or defined(genode) or defined(wasm)
+  when not notSupLinenoise:
+    import std/linenoise
+  else:
+    import std/syncio
+
+  proc readLineFromStdinMayAsync*(prompt: string): string{.mayAsync.} =
+    when notSupLinenoise:
+      stdout.write prompt
+      stdout.flushFile
+      mayNewPromise stdin.readLine()
+    else:
+      var res: ReadLineResult
+      while true:
+        readLineStatus(prompt, res)
+        case res.status
+        of lnCtrlC:
+          #raise new InterruptError
+          #errEchoCompatNoRaise"KeyboardInterrupt"
+          raise new KeyboardInterrupt
+        of lnCtrlD:
+          raise new EOFError
+        of lnCtrlUnkown:
+          # neither ctrl-c nor ctrl-d getten
+          #  e.g. simple input and pass Enter
+          break
+      historyAdd cstring res.line
+      mayNewPromise res.line
 
