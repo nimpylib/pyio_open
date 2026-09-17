@@ -205,7 +205,7 @@ proc write*(f: File, s: string) =
 proc write*(f: File, s: cstring) =
   f.write newTextEncoder().encode(s)
 
-method writeLine*(f: File, s: string){.base.} =
+method writeLine*(f: File, s: string){.base, raises: [IOError].} =
   f.write s
   f.write "\p"
 method writeLine*(f: StdioFile, s: string) =
