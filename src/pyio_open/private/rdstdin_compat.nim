@@ -40,6 +40,16 @@ when defined(js):
     type Callback = proc (e: JsObject){.plainCb.}
     var curAbortController = jsUndefined
 
+    proc excToJs[E: CatchableError](_: typedesc[E]): JsObject =
+      # we `raise` in `try` to setup exception env
+      #   to ensure the `e` contains traceback (
+      #     otherwise it even doesn't has `.name`
+      #   ),
+      # as this function is to be called in nodejs inner
+      #   event loop
+      try: raise new E
+      except E as e: return e.toJs
+
     proc rejectWithKeyboardInterrupt() {.plainCb.} =
       #[abort the pending `rl.question` (if any) with a `KeyboardInterrupt`.
        Aborting the `AbortSignal` makes node's readline reject the awaited
@@ -50,15 +60,7 @@ when defined(js):
       if not curAbortController.isUndefined:
         let c = curAbortController
         curAbortController = jsUndefined
-        # we `raise` in `try` to setup exception env
-        #   to ensure the `e` contains traceback (
-        #     otherwise it even doesn't has `.name`
-        #   ),
-        # as this function is to be called in nodejs inner
-        #   event loop
-        try: raise new KeyboardInterrupt
-        except KeyboardInterrupt as e:
-          c.abort(e.toJs)
+        c.abort(excToJs KeyboardInterrupt)
 
     proc initReadLine: InterfaceConstructorWrapper =
       {.emit: """
@@ -77,10 +79,12 @@ when defined(js):
 
     let rl = initReadLine()
 
+    proc cursorToNewLine{.noconv.} =
+      console.log(cstring"")
     proc questionHandledEof(rl: InterfaceConstructor, ps: cstring
     ): Promise[cstring] =
       ## rl.question(ps) but:
-      ## - EOF (ABORT_ERR) resolves as `nil`
+      ## - EOF rejects with `EOFError`
       ## - SIGINT rejects with `KeyboardInterrupt`
       proc tnewPromise(cb: proc): typeof(result) {.importjs: "new Promise(@)".}
       result = tnewPromise proc (resolve, reject: Callback) {.raises: [].} =
@@ -96,22 +100,18 @@ when defined(js):
             curAbortController = jsUndefined
             if jsTypeof(e) == "object" and e.code.to(cstring) == "ABORT_ERR":
               let cause = e.cause
-              if not cause.isUndefined and not cause.isNull:
+              if not cause.isUndefined:
                 reject(cause)     # SIGINT: KeyboardInterrupt carried as reason
-                return
-              resolve(nil.toJs)   # EOF
+              else:
+                cursorToNewLine()
+                reject excToJs EOFError
               return
             reject(e)
         )
-    
-    proc cursorToNewLine{.noconv.} =
-      console.log(cstring"")
 
     proc readLineFromStdinAsync(ps: cstring): cstring{.async.} =
       let res = await rl.obj.questionHandledEof ps
-      if res.isNil:
-        cursorToNewLine()
-        raise new EOFError
+      assert res.isNil.not
       res
 
     setReadLine readLineFromStdinAsync
