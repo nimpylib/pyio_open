@@ -50,11 +50,11 @@ export io_abc except `$`
 import pkg/pyerrors/oserr
 export FileNotFoundError
 
-import ./pyio_open/nio
+import pkg/vsyncio as nio
 
 #import ./os_impl/posix_like/truncate
 #import ./os_impl/posix_like/isatty
-import ./pyio_open/private/isattyfile
+import pkg/vsyncio/extraMeth/m_isatty
 #import ./signal_impl/state
 #discard signal_global_state
 import ./pyio_open/private/ncodec

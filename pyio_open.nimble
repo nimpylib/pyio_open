@@ -28,6 +28,7 @@ pylib "pywarnings", " ^= 0.1.0"
 pylib "auditfunc", " ^= 0.1.0"
 pylib "jscompat", " ^= 0.1.9"
 pylib "errno", " ^= 0.1.0"
+pylib "vsyncio", " ^= 0.1.0"
 
 import std/[algorithm, os]
 
@@ -43,8 +44,6 @@ task t, "t": echo testFiles()
 task testJs, "Test Node.js backend":
   for testFile in testFiles():
     exec "nim js -r -d:nodejs " & quoteShell(testFile)
-  when defined(posix):
-    exec "sh tests/test_stdin_readline.sh node"
 
 task testDeno, "Test Deno backend":
   for testFile in testFiles():
@@ -53,5 +52,4 @@ task testDeno, "Test Deno backend":
     exec "nim js -d:deno " & quoteShell("-o:" & output) & " " & quoteShell(testFile)
     exec "deno run --allow-read --allow-write " &
       quoteShell(output)
-  when defined(posix):
-    exec "sh tests/test_stdin_readline.sh deno"
+

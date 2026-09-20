@@ -36,9 +36,8 @@ const
 when defined(js):
   import std/tables
   import std/[jsffi, strutils]
-  import ./jsutils
+  import pkg/vsyncio/private/[jsutils, jsbuf]
   import pkg/jscompat/utils/[jsencodings, jstypedarrays]
-  import ./jsbuf
 
   # NOTE: WHATWG's encoding list, which is also what JS's TextDecoder
   # supports, overlaps with but is not the same as Python's codecs list.

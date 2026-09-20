@@ -1,7 +1,6 @@
 import std/unittest
 
 import pyio_open as io
-import pyio_open/nio
 
 test "standard streams":
   check io.stdin.name == "<stdin>"
@@ -25,17 +24,4 @@ test "standard streams":
   check io.stderr.write("stderr stream works\n") == 20
   io.stdout.flush()
   io.stderr.flush()
-  nio.stdout.writeLine("stdout writeLine works")
-  nio.stderr.writeLine("stderr writeLine works")
 
-when defined(js) and defined(testStdinReadLine):
-  test "read standard input lines":
-    nio.stdout.writeLine("stdin-ready-1")
-    check nio.stdin.readLine() == "first"
-    nio.stdout.writeLine("stdin-ready-2")
-    check nio.stdin.readLine() == "second"
-    nio.stdout.writeLine("stdin-ready-3")
-    check nio.stdin.readLine() == "last"
-    nio.stdout.writeLine("stdin-ready-eof")
-    expect EOFError:
-      discard nio.stdin.readLine()
