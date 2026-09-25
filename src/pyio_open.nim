@@ -57,7 +57,7 @@ import pkg/vsyncio as nio
 import pkg/vsyncio/extraMeth/m_isatty
 #import ./signal_impl/state
 #discard signal_global_state
-import ./pyio_open/private/ncodec
+import pkg/ncodecs
 export DefErrors, LookupError
 #import ../pystring/[strimpl, strbltins]
 #import ../pybytes/[bytesimpl, bytesbltins]
@@ -122,7 +122,7 @@ type
     codec: NCodecInfo
   
 func encoding*(s: TextIOWrapper): PyStr = s.codec.name
-func errors*(s: TextIOWrapper): PyStr = s.codec.errors
+func errors*(s: TextIOWrapper): PyStr = $s.codec.errors
 
 type
   RawIOBase* = ref object of IOBase

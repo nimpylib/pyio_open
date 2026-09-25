@@ -29,6 +29,7 @@ pylib "auditfunc", " ^= 0.1.0"
 pylib "jscompat", " ^= 0.1.9"
 pylib "errno", " ^= 0.1.0"
 pylib "vsyncio", " ^= 0.1.0"
+pylib "ncodecs", " ^= 0.1.0"
 
 import std/[algorithm, os]
 
