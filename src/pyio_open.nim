@@ -210,7 +210,7 @@ proc peekChar(self: IOBase): char =
     result = char ci
 
 template Iencode =
-  result = self.codec.decode(result).data
+  result = self.codec.decode(result)
 
 const NoneChar = '\0'  # means None
 type
@@ -437,9 +437,9 @@ proc write*(self: TextIOWrapper, s: PyStr): int{.discardable, EncodingIOEffects.
     checkW "我", "我", encoding="utf-8", writeLen=1
   
   proc cvtRet(oriStr: string): int {.EncodingIOEffects.}=
-    let t = self.codec.encode(oriStr)
-    discard write(IOBase(self), t.data)
-    t.len
+    let data = self.codec.encode(oriStr)
+    discard write(IOBase(self), data)
+    data.runeLen
   writeImpl(self, s, cvtRet)
 
 #[
